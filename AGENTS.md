@@ -129,8 +129,9 @@ passes a placeholder.
 Day to day, run `pnpm dev:convex` alongside `astro dev --background` — it watches
 `convex/` and pushes changes. `pnpm convex:deploy` pushes to production.
 
-See [DEPLOY.md](./DEPLOY.md) for the deploy sequence and the full split between
-build-time, deploy-time, and runtime environment variables.
+See [DEPLOY.md](./DEPLOY.md) for the deploy sequence, the split between
+build-time, deploy-time, and runtime environment variables, and the CI/CD work
+still outstanding — the workflows do not deploy Convex yet.
 
 React components read data with `useQuery`/`useMutation` from `convex/react`; the
 `ConvexProvider` is wired up in `src/app/App.tsx`.

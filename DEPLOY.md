@@ -19,8 +19,9 @@ imports `api` from `convex/_generated/api`, step 2 cannot compile until step 1
 has run. Deploying the backend first also means the frontend never ships a call
 to a query the backend does not have yet.
 
-In CI this is `.github/workflows/deploy.yml`: a `convex` job runs step 1, then
-the `publish` job runs step 2 inside the Docker build and pushes the image.
+In CI this should be `.github/workflows/deploy.yml`: a job runs step 1, then the
+`publish` job runs step 2 inside the Docker build and pushes the image. **That
+wiring does not exist yet** — see [CI/CD handoff](#cicd-handoff) below.
 
 ## Environment variables
 
@@ -88,23 +89,127 @@ it watches `convex/` and pushes changes as you edit.
 
 ## Running the deploy
 
-`.github/workflows/deploy.yml` is manual dispatch only:
+Today, manually, from a checkout with the Convex CLI logged in:
 
 ```
-gh workflow run deploy.yml
+npx convex deploy
+docker build --build-arg PUBLIC_CONVEX_URL=https://disciplined-toucan-793.convex.cloud -t lawyer-board .
 ```
 
-It runs CI first (typecheck, build, image build, boot smoke test), then
-`convex deploy`, then builds and pushes the image to ECR tagged with the commit
-SHA and `latest`. Pushing the image does not roll out the running service —
-that step is outside this repo.
+`.github/workflows/deploy.yml` is manual dispatch (`gh workflow run deploy.yml`)
+and currently builds and pushes the image to ECR, but **does not deploy Convex**
+and **does not pass the build arg**, so the image it publishes 500s on every
+render. Both gaps are described below.
 
-## Current state
+## CI/CD handoff
+
+The application side of Convex is done and merged in this PR. The workflow
+changes were deliberately left out so they can be reviewed and owned by whoever
+runs deploys. Three things need doing.
+
+### 1. CI is red on this branch, and will be until `ci.yml` is updated
+
+Two failures, both caused by `PUBLIC_CONVEX_URL` now being a validated
+`astro:env` variable:
+
+- **Typecheck** — `tsc` needs the `astro:env/client` module declaration, which
+  lives in the gitignored `.astro/types.d.ts`. An `astro sync` step before the
+  typecheck generates it.
+- **Build / image build** — `astro build` now fails with
+  `PUBLIC_CONVEX_URL is missing` when the variable is unset.
+
+CI has no Convex deployment and does not need one; a placeholder is enough,
+since nothing connects during a build or the boot smoke test. In the `verify`
+job:
+
+```yaml
+      - name: Sync Astro types
+        run: pnpm exec astro sync
+        env:
+          PUBLIC_CONVEX_URL: https://ci-placeholder.convex.cloud
+
+      - name: Typecheck
+        run: pnpm exec tsc --noEmit -p tsconfig.json
+
+      - name: Build
+        run: pnpm build
+        env:
+          PUBLIC_CONVEX_URL: https://ci-placeholder.convex.cloud
+```
+
+And in the `docker` job's build step:
+
+```yaml
+          build-args: |
+            PUBLIC_CONVEX_URL=https://ci-placeholder.convex.cloud
+```
+
+### 2. `deploy.yml` never deploys Convex
+
+Functions in `convex/` are currently only reachable by someone running
+`npx convex deploy` by hand. A job needs to run it before the image is built, so
+the backend is never behind the frontend that calls it:
+
+```yaml
+  convex:
+    name: Deploy Convex functions
+    needs: verify
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+    steps:
+      - uses: actions/checkout@... # v4.2.2
+      - uses: pnpm/action-setup@... # v4.1.0
+      - uses: actions/setup-node@... # v4.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Push functions to the production deployment
+        run: pnpm exec convex deploy --yes
+        env:
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY }}
+```
+
+Then gate publishing on it: `needs: [verify, convex]`.
+
+### 3. `deploy.yml` builds an image with no Convex URL
+
+The `publish` job must pass the real URL into the Docker build, or it ships a
+bundle with the value inlined as `undefined`:
+
+```yaml
+    env:
+      PUBLIC_CONVEX_URL: ${{ vars.PUBLIC_CONVEX_URL }}
+    steps:
+      # Fail here rather than publishing an image that 500s on every render.
+      - name: Require the Convex URL
+        run: test -n "$PUBLIC_CONVEX_URL" || { echo "Set PUBLIC_CONVEX_URL on the production environment"; exit 1; }
+      ...
+      - name: Build and push image
+        with:
+          build-args: |
+            PUBLIC_CONVEX_URL=${{ env.PUBLIC_CONVEX_URL }}
+```
+
+The `Dockerfile` already accepts this build arg; that part is in this PR.
+
+## Repository settings
 
 | Setting | Scope | Status |
 | --- | --- | --- |
 | `AWS_DEPLOYMENT_ROLE_ARN` | repository variable | set |
 | `AWS_REGION` | repository variable | set |
-| `ECR_REPOSITORY` | repository variable | set |
-| `PUBLIC_CONVEX_URL` | `production` variable | set |
-| `CONVEX_DEPLOY_KEY` | `production` secret | **not set — deploy fails without it** |
+| `ECR_REPOSITORY` | repository variable | set (`lawyer-board`) |
+| `PUBLIC_CONVEX_URL` | `production` variable | set (`https://disciplined-toucan-793.convex.cloud`) |
+| `CONVEX_DEPLOY_KEY` | `production` secret | **not set — the Convex deploy job cannot work without it** |
+
+The deploy key is generated in the Convex dashboard under Settings → Deploy Keys;
+no CLI command mints one. Then:
+
+```
+gh secret set CONVEX_DEPLOY_KEY --env production
+```
+
+Convex production deployment:
+https://dashboard.convex.dev/t/claude-session-community-6a/dashboard/disciplined-toucan-793
