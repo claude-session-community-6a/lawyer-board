@@ -8,10 +8,21 @@ on:
 
 permissions:
   contents: read
-  
+  # Only used by the publish steps, which run on main. OIDC tokens are minted
+  # per job, so granting this on a pull request run costs nothing: the trust
+  # policy has no statement that matches a PR subject for this workflow.
+  id-token: write
+
+concurrency:
+  group: ci-${{ github.ref }}
+  # Superseded PR pushes are worth cancelling; a main run is publishing, so it
+  # is left to finish.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   # One pipeline: the app is typechecked, built and packaged in the same
   # workspace, so the image contains exactly the artifacts that were verified.
+  # A pull request stops after the image builds; main goes on to push it.
   build:
     name: Build and package
     runs-on: ubuntu-latest
@@ -19,6 +30,10 @@ jobs:
       name: production
     env:
       PUBLIC_CONVEX_URL: ${{ vars.PUBLIC_CONVEX_URL }}
+      # The single switch between "validate only" and "validate and publish".
+      # workflow_dispatch through deploy.yml also lands here when dispatched
+      # from main, which is the branch its OIDC trust policy pins.
+      PUBLISH: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
@@ -34,36 +49,54 @@ jobs:
       # convex/_generated/ is gitignored, so it is absent from a fresh checkout
       # and has to be produced here — the typecheck and build read its types.
       # codegen talks to the deployment named by the key, so this needs
-      # CONVEX_DEPLOY_KEY as a repository secret; there is no offline mode.
-      # - name: Generate Convex bindings
-      #   run: pnpm exec convex codegen --typecheck disable
-      #   env:
-      #     CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY }}
+      # CONVEX_DEPLOY_KEY; there is no offline mode. It does not modify what is
+      # running on the deployment, which is why a PR may run it.
+      - name: Generate Convex bindings
+        if: env.PUBLISH != 'true'
+        run: pnpm exec convex codegen --typecheck disable
+        env:
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY }}
+
+      # On main the functions themselves ship, before the frontend that calls
+      # them. deploy also writes convex/_generated/, so it stands in for the
+      # codegen step above rather than running alongside it.
+      - name: Deploy Convex functions
+        if: env.PUBLISH == 'true'
+        run: pnpm exec convex deploy --yes
+        env:
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY }}
 
       # `astro check` cannot run under TypeScript 7, so the script is
       # `astro sync && tsc --noEmit`; the sync generates the astro:env types.
-      # - name: Typecheck
-      #   run: pnpm typecheck
+      - name: Typecheck
+        run: pnpm typecheck
+
+      # There is no test runner wired up yet. Kept conditional so adding a
+      # `test` script to package.json is all it takes to gate merges on it.
+      - name: Test
+        run: |
+          if node -e "const s=JSON.parse(require('fs').readFileSync('package.json','utf8')).scripts||{};process.exit(s.test?0:1)"; then
+            pnpm test
+          else
+            echo "No \`test\` script in package.json — skipping." | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Build
-        run: |
-          pnpm convex deploy --yes
-          pnpm build
-        env:
-          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY }}
+        run: pnpm build
 
       # Replaces the dev tree in place with a production-only, hoisted one.
       # `hoisted` writes a plain node_modules directory instead of pnpm's
       # symlinked store layout, which is what makes it copyable into an image.
-      # Runs after the build, which needs devDependencies.
+      # Runs after the build and the tests, which need devDependencies.
       - name: Install production dependencies
         run: pnpm install --frozen-lockfile --prod --config.node-linker=hoisted
 
       - uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2 # v3.10.0
 
-      # Packaging only — publishing happens in the Deploy workflow. The
+      # Pull request: prove the image still assembles, then stop. The
       # Dockerfile just copies dist/ and node_modules from the context.
       - name: Build image
+        if: env.PUBLISH != 'true'
         uses: docker/build-push-action@471d1dc4e07e5cdedd4c2171150001c434f0b7a4 # v6.15.0
         with:
           context: .
@@ -71,3 +104,34 @@ jobs:
           tags: lawyer-board:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # main only, from here down.
+      - name: Configure AWS credentials
+        if: env.PUBLISH == 'true'
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOYMENT_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Log in to Amazon ECR
+        if: env.PUBLISH == 'true'
+        uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2.1.7
+
+      - name: Build and push image
+        if: env.PUBLISH == 'true'
+        uses: docker/build-push-action@471d1dc4e07e5cdedd4c2171150001c434f0b7a4 # v6.15.0
+        with:
+          context: .
+          push: true
+          # The commit tag is the immutable one deployments should reference;
+          # `latest` is a convenience pointer at the tip of main.
+          tags: |
+            ${{ vars.ECR_REGISTRY }}/${{ vars.ECR_REPOSITORY }}:${{ github.sha }}
+            ${{ vars.ECR_REGISTRY }}/${{ vars.ECR_REPOSITORY }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Summary
+        if: env.PUBLISH == 'true'
+        run: |
+          echo "Pushed \`${{ vars.ECR_REGISTRY }}/${{ vars.ECR_REPOSITORY }}:${{ github.sha }}\`" >> "$GITHUB_STEP_SUMMARY"
