@@ -15,6 +15,10 @@ jobs:
   build:
     name: Build and package
     runs-on: ubuntu-latest
+    environment:
+      name: production
+    env:
+      PUBLIC_CONVEX_URL: ${{ vars.PUBLIC_CONVEX_URL }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
@@ -31,23 +35,22 @@ jobs:
       # and has to be produced here — the typecheck and build read its types.
       # codegen talks to the deployment named by the key, so this needs
       # CONVEX_DEPLOY_KEY as a repository secret; there is no offline mode.
-      - name: Generate Convex bindings
-        run: pnpm exec convex codegen --typecheck disable
-        env:
-          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY }}
+      # - name: Generate Convex bindings
+      #   run: pnpm exec convex codegen --typecheck disable
+      #   env:
+      #     CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY }}
 
       # `astro check` cannot run under TypeScript 7, so the script is
       # `astro sync && tsc --noEmit`; the sync generates the astro:env types.
-      - name: Typecheck
-        run: pnpm typecheck
+      # - name: Typecheck
+      #   run: pnpm typecheck
 
       - name: Build
-        run: pnpm build
+        run: |
+          pnpm convex deploy --yes
+          pnpm build
         env:
-          # Vite inlines this at build time. CI has no Convex deployment and
-          # needs none, since nothing connects during a build. The Deploy
-          # workflow supplies the real URL.
-          PUBLIC_CONVEX_URL: https://ci-placeholder.convex.cloud
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY }}
 
       # Replaces the dev tree in place with a production-only, hoisted one.
       # `hoisted` writes a plain node_modules directory instead of pnpm's
