@@ -241,8 +241,10 @@ React components read data with `useQuery`/`useMutation` from `convex/react`; th
 
 The trust policy only decides *who may assume* the role. What the role can then
 *do* is a separate identity policy, and it has to grow to cover Terraform: the
-role now creates VPCs, ECS services, S3 buckets, OpenSearch collections and —
-notably — IAM roles. `iam:CreateRole`, `iam:PutRolePolicy` and
+role now creates VPCs, ECS services, S3 buckets, OpenSearch collections,
+CloudFront distributions and VPC origins, and — notably — IAM roles. The
+CloudFront additions also need `ec2:GetManagedPrefixListEntries`, which is easy
+to miss because it reads as a networking permission rather than a CDN one. `iam:CreateRole`, `iam:PutRolePolicy` and
 `iam:AttachRolePolicy` are the ones usually missing, and a role that can create
 roles can escalate its own privileges. Attaching an `iam:PermissionsBoundary`
 condition is the standard way to bound that.

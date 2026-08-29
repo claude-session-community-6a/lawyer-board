@@ -1,6 +1,16 @@
 output "app_url" {
-  description = "Where the app is reachable. Plain HTTP until a domain and certificate exist."
-  value       = "http://${aws_lb.main.dns_name}"
+  description = "Where the app is reachable. HTTPS on CloudFront's own certificate; plain HTTP is redirected."
+  value       = "https://${aws_cloudfront_distribution.app.domain_name}"
+}
+
+output "cloudfront_distribution_id" {
+  description = "For `aws cloudfront create-invalidation` after a deploy that changes cached assets."
+  value       = aws_cloudfront_distribution.app.id
+}
+
+output "alb_dns_name" {
+  description = "Internal only — resolves to private addresses and is not reachable from outside the VPC."
+  value       = aws_lb.main.dns_name
 }
 
 output "ecr_repository_url" {
