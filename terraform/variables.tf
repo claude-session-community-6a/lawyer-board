@@ -35,17 +35,6 @@ variable "az_count" {
   }
 }
 
-variable "vpc_origin_unsupported_zone_ids" {
-  description = <<-EOT
-    AZ IDs that CloudFront VPC origins cannot use. Subnets are kept out of
-    these so the service-managed ENI can be created. The default is the
-    exception list from the VPC origins documentation; entries outside the
-    current region are ignored, so it needs no per-region tailoring.
-  EOT
-  type        = list(string)
-  default     = ["use1-az3", "usw1-az2", "apne1-az3", "cac1-az3"]
-}
-
 variable "single_nat_gateway" {
   description = <<-EOT
     Route every private subnet through one NAT gateway instead of one per AZ.
@@ -139,23 +128,6 @@ variable "opensearch_admin_principals" {
   EOT
   type        = list(string)
   default     = []
-}
-
-# --- CloudFront --------------------------------------------------------------
-
-variable "cloudfront_price_class" {
-  description = <<-EOT
-    Which edge locations serve the distribution. PriceClass_100 is the United
-    States, Mexico, Canada, Europe and Israel — enough for this app, and the
-    cheapest. PriceClass_All adds South America and Asia Pacific.
-  EOT
-  type        = string
-  default     = "PriceClass_100"
-
-  validation {
-    condition     = contains(["PriceClass_100", "PriceClass_200", "PriceClass_All"], var.cloudfront_price_class)
-    error_message = "Must be PriceClass_100, PriceClass_200 or PriceClass_All."
-  }
 }
 
 # --- Storage -----------------------------------------------------------------
