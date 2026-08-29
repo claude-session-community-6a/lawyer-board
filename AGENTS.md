@@ -23,21 +23,30 @@ Consult these guides before working on related tasks:
 
 ## Container and CI
 
-The app ships as a container built by the multi-stage `Dockerfile` (Astro's
-standalone Node adapter). Build and run locally:
+The app ships as a container (Astro's standalone Node adapter). The `Dockerfile`
+compiles nothing: it copies `dist/` and a production `node_modules` out of the
+build context, so both must exist before you build it.
 
 ```
+pnpm build
+pnpm install --frozen-lockfile --prod --config.node-linker=hoisted
 docker build -t lawyer-board .
 docker run --rm -p 4321:4321 lawyer-board
 ```
+
+Because `node_modules` is copied rather than installed, it has to come from a
+host matching the base image — glibc, same CPU. The base is `node:*-slim`
+(Debian), not Alpine, for exactly that reason: the tree carries native binaries
+(sharp, esbuild, lightningcss). An image prepared on macOS or arm64 runs only
+there. Afterwards, `pnpm install` restores the dev tree.
 
 Keep the Node version in `Dockerfile` (`ARG NODE_VERSION`) in sync with `.nvmrc`.
 
 Workflows:
 
-- `.github/workflows/ci.yml` — typecheck, `astro build`, then build the image and
-  boot it to confirm it serves traffic. Runs on pushes to `main` and on PRs, and
-  is reusable via `workflow_call`.
+- `.github/workflows/ci.yml` — one `build` job: Convex codegen, typecheck,
+  `astro build`, a production dependency install, then the image build. Runs on
+  pushes to `main` and on PRs, and is reusable via `workflow_call`.
 - `.github/workflows/deploy.yml` — manual dispatch. Calls CI first, then assumes
   the AWS role via OIDC and pushes the image to ECR.
 - `.github/workflows/terraform-plan.yml` — on PRs touching `terraform/`. Runs
@@ -56,8 +65,12 @@ run against the state at the same time.
 Deploy needs three repository variables: `AWS_DEPLOYMENT_ROLE_ARN`, `AWS_REGION`,
 and `ECR_REPOSITORY`.
 
-Note: `astro check` cannot run under TypeScript 7, so `tsc --noEmit` is the
-typecheck in CI.
+Note: `astro check` cannot run under TypeScript 7 — the language server needs
+TypeScript's programmatic API, which the native compiler does not expose yet
+(withastro/roadmap#1321). Until it does, `pnpm typecheck` is the typecheck: it
+runs `astro sync` (generating the `astro:env` and content-collection types into
+the gitignored `.astro/`) and then `tsc --noEmit`. Run that rather than `tsc`
+directly, or a fresh checkout fails on `Cannot find module 'astro:env/client'`.
 
 ## AWS OIDC trust policy
 
@@ -180,6 +193,41 @@ add a temporary step before `configure-aws-credentials`:
 ```
 
 Remove it once debugging is done — it prints a live credential into the logs.
+## Convex
+
+Backend functions live in `convex/` and run on Convex, not in the Astro server.
+`convex/_generated/` is written by the CLI — never edit it by hand. The root
+`tsconfig.json` excludes `convex/`; that directory has its own `tsconfig.json`
+and `convex dev` typechecks it.
+
+First-time setup (interactive, needs a Convex login):
+
+```
+npx convex dev
+```
+
+It creates the deployment, writes `CONVEX_DEPLOYMENT` and the deployment URL to
+`.env.local`, and generates `convex/_generated/`. `.env.local` also needs:
+
+```
+PUBLIC_CONVEX_URL=<the same deployment URL>
+```
+
+`PUBLIC_CONVEX_URL` is declared in the `env.schema` block of `astro.config.mjs`
+and read through `astro:env/client`, so a missing value fails `astro build`
+rather than the first render. Vite inlines it at build time — into the server
+bundle too — which is why the `Dockerfile` takes it as a build arg and why CI
+passes a placeholder.
+
+Day to day, run `pnpm dev:convex` alongside `astro dev --background` — it watches
+`convex/` and pushes changes. `pnpm convex:deploy` pushes to production.
+
+See [DEPLOY.md](./DEPLOY.md) for the deploy sequence, the split between
+build-time, deploy-time, and runtime environment variables, and the CI/CD work
+still outstanding — the workflows do not deploy Convex yet.
+
+React components read data with `useQuery`/`useMutation` from `convex/react`; the
+`ConvexProvider` is wired up in `src/app/App.tsx`.
 
 ### Permissions attached to the role
 

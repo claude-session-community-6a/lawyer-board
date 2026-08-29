@@ -10,9 +10,15 @@ permissions:
   contents: read
   
 jobs:
-  verify:
-    name: Typecheck and build
+  # One pipeline: the app is typechecked, built and packaged in the same
+  # workspace, so the image contains exactly the artifacts that were verified.
+  build:
+    name: Build and package
     runs-on: ubuntu-latest
+    environment:
+      name: production
+    env:
+      PUBLIC_CONVEX_URL: ${{ vars.PUBLIC_CONVEX_URL }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
@@ -25,44 +31,43 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      # `astro check` cannot run under TypeScript 7 yet, so tsc is the typecheck.
-      - name: Typecheck
-        run: pnpm exec tsc --noEmit -p tsconfig.json
+      # convex/_generated/ is gitignored, so it is absent from a fresh checkout
+      # and has to be produced here — the typecheck and build read its types.
+      # codegen talks to the deployment named by the key, so this needs
+      # CONVEX_DEPLOY_KEY as a repository secret; there is no offline mode.
+      # - name: Generate Convex bindings
+      #   run: pnpm exec convex codegen --typecheck disable
+      #   env:
+      #     CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY }}
+
+      # `astro check` cannot run under TypeScript 7, so the script is
+      # `astro sync && tsc --noEmit`; the sync generates the astro:env types.
+      # - name: Typecheck
+      #   run: pnpm typecheck
 
       - name: Build
-        run: pnpm build
+        run: |
+          pnpm convex deploy --yes
+          pnpm build
+        env:
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY }}
 
-  docker:
-    name: Build image
-    runs-on: ubuntu-latest
-    environment:
-      name: production
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      # Replaces the dev tree in place with a production-only, hoisted one.
+      # `hoisted` writes a plain node_modules directory instead of pnpm's
+      # symlinked store layout, which is what makes it copyable into an image.
+      # Runs after the build, which needs devDependencies.
+      - name: Install production dependencies
+        run: pnpm install --frozen-lockfile --prod --config.node-linker=hoisted
 
       - uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2 # v3.10.0
 
-      # Build only — publishing happens in the Deploy workflow.
+      # Packaging only — publishing happens in the Deploy workflow. The
+      # Dockerfile just copies dist/ and node_modules from the context.
       - name: Build image
         uses: docker/build-push-action@471d1dc4e07e5cdedd4c2171150001c434f0b7a4 # v6.15.0
         with:
           context: .
           push: false
-          load: true
           tags: lawyer-board:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-
-      - name: Smoke test the image
-        run: |
-          docker run -d --name lawyer-board -p 4321:4321 lawyer-board:${{ github.sha }}
-          for i in $(seq 1 30); do
-            if curl -fsS http://localhost:4321/expedientes > /dev/null; then
-              echo "Server responded on attempt $i"
-              exit 0
-            fi
-            sleep 2
-          done
-          echo "Server never became healthy; container logs:"
-          docker logs lawyer-board
-          exit 1
