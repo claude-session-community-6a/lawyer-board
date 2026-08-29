@@ -46,3 +46,57 @@ and `ECR_REPOSITORY`.
 
 Note: `astro check` cannot run under TypeScript 7, so `tsc --noEmit` is the
 typecheck in CI.
+
+## AWS OIDC trust policy
+
+The deploy job authenticates to AWS with GitHub's OIDC provider — no stored
+access keys. The role's trust policy on account `828786775790`:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "Federated": "arn:aws:iam::828786775790:oidc-provider/token.actions.githubusercontent.com"
+      },
+      "Action": "sts:AssumeRoleWithWebIdentity",
+      "Condition": {
+        "StringEquals": {
+          "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+          "token.actions.githubusercontent.com:sub": "repo:claude-session-community-6a/lawyer-board:environment:production",
+          "token.actions.githubusercontent.com:ref": "refs/heads/main"
+        }
+      }
+    }
+  ]
+}
+```
+
+Two things about the `sub` claim that are easy to get wrong:
+
+- Because the `publish` job declares `environment: production`, GitHub emits the
+  environment form of `sub` and **omits the ref**. It is either
+  `repo:OWNER/REPO:environment:NAME` or `repo:OWNER/REPO:ref:refs/heads/BRANCH`,
+  never both. Adding `:ref:...` to the end of the environment form makes the
+  policy match nothing.
+- The branch restriction therefore rides on the separate top-level `ref` claim.
+  It matters here because `deploy.yml` is `workflow_dispatch`-only and dispatch
+  can be triggered from any branch. Setting the `production` environment's
+  "Deployment branches" rule to `main` enforces the same thing earlier, before
+  the token is minted.
+
+Changing the job's `environment:` or trigger changes the claims, so the trust
+policy has to be updated in step. To see what AWS is actually comparing against,
+add a temporary step before `configure-aws-credentials`:
+
+```yaml
+- name: Dump OIDC claims
+  run: |
+    TOKEN=$(curl -sH "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+      "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com" | jq -r .value)
+    echo "$TOKEN" | cut -d. -f2 | base64 -d 2>/dev/null | jq '{sub, ref, repository, environment}'
+```
+
+Remove it once debugging is done — it prints a live credential into the logs.
