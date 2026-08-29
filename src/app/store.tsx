@@ -1,42 +1,42 @@
-import { createContext, useContext, useMemo, useState, type ReactNode } from "react";
-import type { Expediente } from "@/lib/expedientes";
+import { createContext, useContext, useMemo, type ReactNode } from "react";
+import { useQuery } from "convex/react";
+
+import { api } from "../../convex/_generated/api";
+
+/** Lo que devuelve `expedientes.list`: el asunto más el pulso de su índice. */
+export type ExpedienteEnLista = (typeof api.expedientes.list)["_returnType"][number];
 
 export interface SsrPayload {
-  /** Pathname Astro rendered, used to prime wouter's router. */
+  /** Pathname que renderizó Astro, para primar el router de wouter. */
   path: string;
-  /** Query string (without the leading `?`) Astro rendered. */
+  /** Query string (sin `?`) que renderizó Astro. */
   search: string;
-  expedientes: Expediente[];
+  /** El listado de Convex al momento del render, para que el primer pintado traiga datos. */
+  expedientes: ExpedienteEnLista[];
 }
 
 interface Store {
   ssr: SsrPayload;
-  expedientes: Expediente[];
-  /** Adds a freshly created expediente so the SPA sees it without a reload. */
-  agregarExpediente: (expediente: Expediente) => void;
+  /** En vivo desde Convex; cae al snapshot del SSR hasta que abre el socket. */
+  expedientes: ExpedienteEnLista[];
+  /** Cierto sólo antes de la primera respuesta de Convex. */
+  cargando: boolean;
 }
 
 const StoreContext = createContext<Store | null>(null);
 
-export function StoreProvider({
-  ssr,
-  children,
-}: {
-  ssr: SsrPayload;
-  children: ReactNode;
-}) {
-  // Seeded from the server render, then owned by the client for the rest of
-  // the session. A reload re-seeds it from Astro.
-  const [expedientes, setExpedientes] = useState(ssr.expedientes);
+export function StoreProvider({ ssr, children }: { ssr: SsrPayload; children: ReactNode }) {
+  // Convex empuja cada escritura a cada suscriptor: un expediente creado o un
+  // documento que avanza en el pipeline aparecen aquí sin que nadie avise.
+  const live = useQuery(api.expedientes.list);
 
   const value = useMemo<Store>(
     () => ({
       ssr,
-      expedientes,
-      agregarExpediente: (expediente) =>
-        setExpedientes((current) => [expediente, ...current]),
+      expedientes: live ?? ssr.expedientes,
+      cargando: live === undefined,
     }),
-    [ssr, expedientes]
+    [ssr, live],
   );
 
   return <StoreContext value={value}>{children}</StoreContext>;
@@ -44,6 +44,6 @@ export function StoreProvider({
 
 export function useStore(): Store {
   const value = useContext(StoreContext);
-  if (!value) throw new Error("useStore must be used inside <StoreProvider>");
+  if (!value) throw new Error("useStore debe usarse dentro de <StoreProvider>");
   return value;
 }
