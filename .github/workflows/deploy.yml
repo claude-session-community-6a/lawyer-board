@@ -9,6 +9,8 @@ permissions:
 jobs:
   run_job_with_aws:
     runs-on: ubuntu-latest
+    environment:
+      name: production
     env:
       AWS_DEPLOYMENT_ROLE_ARN: ${{ vars.AWS_DEPLOYMENT_ROLE_ARN }}
       AWS_REGION: ${{ vars.AWS_REGION }}
