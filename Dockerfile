@@ -2,6 +2,7 @@
 
 # Astro runs with the standalone Node adapter, so the runtime image only needs
 # the built server plus production dependencies.
+# Keep in sync with .nvmrc, which CI uses for the non-container jobs.
 ARG NODE_VERSION=22.22.0
 
 # --- deps: full dependency tree, used to build -------------------------------
