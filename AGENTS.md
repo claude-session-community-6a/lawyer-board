@@ -44,8 +44,12 @@ Workflows:
 Deploy needs three repository variables: `AWS_DEPLOYMENT_ROLE_ARN`, `AWS_REGION`,
 and `ECR_REPOSITORY`.
 
-Note: `astro check` cannot run under TypeScript 7, so `tsc --noEmit` is the
-typecheck in CI.
+Note: `astro check` cannot run under TypeScript 7 — the language server needs
+TypeScript's programmatic API, which the native compiler does not expose yet
+(withastro/roadmap#1321). Until it does, `pnpm typecheck` is the typecheck: it
+runs `astro sync` (generating the `astro:env` and content-collection types into
+the gitignored `.astro/`) and then `tsc --noEmit`. Run that rather than `tsc`
+directly, or a fresh checkout fails on `Cannot find module 'astro:env/client'`.
 
 ## AWS OIDC trust policy
 

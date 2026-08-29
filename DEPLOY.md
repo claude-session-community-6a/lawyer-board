@@ -109,27 +109,23 @@ runs deploys. Three things need doing.
 
 ### 1. CI is red on this branch, and will be until `ci.yml` is updated
 
-Two failures, both caused by `PUBLIC_CONVEX_URL` now being a validated
-`astro:env` variable:
+Two failures:
 
-- **Typecheck** — `tsc` needs the `astro:env/client` module declaration, which
-  lives in the gitignored `.astro/types.d.ts`. An `astro sync` step before the
-  typecheck generates it.
-- **Build / image build** — `astro build` now fails with
-  `PUBLIC_CONVEX_URL is missing` when the variable is unset.
+- **Typecheck** — `tsc` cannot resolve `astro:env/client`. That declaration is
+  generated into the gitignored `.astro/`, which a fresh checkout does not have.
+  Fixed by calling the new `typecheck` script, which runs `astro sync` first.
+  It needs no environment variable.
+- **Build / image build** — `astro build` fails with
+  `PUBLIC_CONVEX_URL is missing` when the variable is unset. CI has no Convex
+  deployment and does not need one: nothing connects during a build or the boot
+  smoke test, so a placeholder is enough.
 
-CI has no Convex deployment and does not need one; a placeholder is enough,
-since nothing connects during a build or the boot smoke test. In the `verify`
-job:
+In the `verify` job, replace the bare `tsc` invocation:
 
 ```yaml
-      - name: Sync Astro types
-        run: pnpm exec astro sync
-        env:
-          PUBLIC_CONVEX_URL: https://ci-placeholder.convex.cloud
-
+      # Runs `astro sync` first, so astro:env types exist. No env var needed.
       - name: Typecheck
-        run: pnpm exec tsc --noEmit -p tsconfig.json
+        run: pnpm typecheck
 
       - name: Build
         run: pnpm build

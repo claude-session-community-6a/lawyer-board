@@ -11,6 +11,7 @@
     "dev:convex": "convex dev",
     "convex:deploy": "convex deploy",
     "build": "astro build",
+    "typecheck": "astro sync && tsc --noEmit",
     "preview": "astro preview",
     "astro": "astro"
   },
