@@ -201,6 +201,64 @@ add a temporary step before `configure-aws-credentials`:
 ```
 
 Remove it once debugging is done — it prints a live credential into the logs.
+
+## El dominio y el flujo de la aplicación
+
+La app implementa la fase 1 de la especificación de Luis: cargar un expediente
+laboral, entenderlo, cruzarlo contra sí mismo y contra la ley, y generar un
+escrito exportable. El recorrido completo, en rutas:
+
+```
+/                                        Tablero
+/expedientes                             Listado
+/expedientes/nuevo                       Alta guiada · 4 pasos, ninguno opcional
+/expedientes/[id]/resumen                Ficha del asunto
+/expedientes/[id]/documentos             Índice · carga por arrastre y pipeline en vivo
+/expedientes/[id]/documentos/[docId]     Visor + panel de extracción · validación humana
+/expedientes/[id]/contradicciones        Alegado vs. documentado
+/expedientes/[id]/leyes                  Cumplimiento contra la LFT en la vigencia del asunto
+/expedientes/[id]/escritos               Escritos, y su editor por secciones
+/expedientes/[id]/bitacora               Traza
+/biblioteca                              Corpus normativo con selector de vigencia
+GET /api/escritos/[id]/pdf               Exportación · la compuerta corre aquí, no sólo en el botón
+```
+
+**Qué está simulado y qué no.** Sólo `convex/ia.ts` finge. Es el pipeline de
+ingesta: encadena mutaciones internas con el scheduler de Convex por los mismos
+estados que tendría una Step Function real (`Recibido → Normalizando →
+Clasificando → Extrayendo → Por validar → Validado`), clasifica por nombre de
+archivo y emite campos con score de confianza. Sustituirlo por Textract y
+Bedrock significa cambiar el cuerpo de `avanzar`; ni los estados ni la tabla
+`campos` se mueven.
+
+Todo lo demás es código determinista y se comporta como en producción:
+
+| Pieza | Archivo | Qué garantiza |
+| --- | --- | --- |
+| Contradicciones | `convex/contradicciones.ts` | Cruce mecánico alegado/documentado, con foja |
+| Cumplimiento | `convex/cumplimiento.ts` | Reglas sobre campos validados, citando la vigencia |
+| Corpus | `convex/corpus/lft.ts` | LFT por precepto y vigencia; extractos, la fuente es el DOF |
+| Prelación | `convex/prelacion.ts` | Qué documento gana cuando dos aportan el mismo dato |
+| Compuerta | `convex/escritos.ts` + la ruta de PDF | Un supuesto o una cita que no verifica bloquean |
+
+Las cinco reglas del dominio están cableadas, no comentadas:
+
+1. **Nada falla en silencio.** `contradicciones.list` devuelve `ejecutado` y
+   `motivo`; el cumplimiento reporta como `Falta dato` la regla cuyo precepto no
+   existe en el corpus a esa fecha, en vez de omitirla.
+2. **Cero aritmética jurídica con modelo.** Plazos, deltas y factores se calculan
+   en TypeScript, con la operación impresa en pantalla.
+3. **Cero cita sin verificar.** `escritos.validarCitas` compara cada artículo
+   contra el corpus en la vigencia de `fechaHechos`.
+4. **El original nunca se modifica.** El pipeline sólo escribe filas nuevas.
+5. **El abogado firma.** Ningún campo bajo el umbral se rellena con una
+   estimación: entra vacío y marcado, y los campos críticos pasan por
+   confirmación humana aunque vengan al 99%.
+
+`expedientes.sembrarDemo` siembra el asunto 1146/2022 con cinco documentos que
+entran al pipeline; es el punto de partida de la demostración. El botón está en
+el tablero y en el listado vacío.
+
 ## Convex
 
 Backend functions live in `convex/` and run on Convex, not in the Astro server.

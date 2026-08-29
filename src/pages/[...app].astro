@@ -5,17 +5,16 @@ import { ConvexHttpClient } from "convex/browser";
 import Layout from "../layouts/Layout.astro";
 import App from "../app/App";
 import { api } from "../../convex/_generated/api";
-import { mapExpediente } from "../lib/expedientes";
 
 export const prerender = false;
 
-// The first paint comes from Convex over HTTP so the list is in the HTML.
-// Once hydrated, `useQuery` takes over on the websocket and keeps it live.
+// El primer pintado sale de Convex por HTTP para que el listado venga en el
+// HTML. Ya hidratado, `useQuery` toma el relevo por websocket y lo mantiene vivo.
 const client = new ConvexHttpClient(PUBLIC_CONVEX_URL);
-const expedientes = (await client.query(api.expedientes.list, {})).map(mapExpediente);
+const expedientes = await client.query(api.expedientes.list, {});
 
-// SSR payload handed to the React app. `path` and `search` prime wouter's
-// router so the first server render matches the URL the client hydrates on.
+// `path` y `search` priman el router de wouter para que el render del servidor
+// coincida con la URL sobre la que hidrata el cliente.
 const ssr = {
 	path: Astro.url.pathname,
 	search: Astro.url.search.replace(/^\?/, ""),
@@ -23,6 +22,6 @@ const ssr = {
 };
 ---
 
-<Layout title="Expedientes — Despacho">
+<Layout title="Juicios laborales — Ávila & Miranda">
 	<App ssr={ssr} client:load />
 </Layout>
