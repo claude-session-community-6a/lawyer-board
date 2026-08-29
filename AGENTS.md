@@ -114,15 +114,25 @@ npx convex dev
 ```
 
 It creates the deployment, writes `CONVEX_DEPLOYMENT` and the deployment URL to
-`.env.local`, and generates `convex/_generated/`. Astro only exposes
-`PUBLIC_`-prefixed vars to the browser, so `.env.local` also needs:
+`.env.local`, and generates `convex/_generated/`. `.env.local` also needs:
 
 ```
 PUBLIC_CONVEX_URL=<the same deployment URL>
 ```
 
+`PUBLIC_CONVEX_URL` is declared in the `env.schema` block of `astro.config.mjs`
+and read through `astro:env/client`, so a missing value fails `astro build`
+rather than the first render. Vite inlines it at build time — into the server
+bundle too — which is why the `Dockerfile` takes it as a build arg and why CI
+passes a placeholder.
+
 Day to day, run `pnpm dev:convex` alongside `astro dev --background` — it watches
 `convex/` and pushes changes. `pnpm convex:deploy` pushes to production.
+
+In CI, `deploy.yml` pushes functions (`convex deploy`) before building the
+image, so the backend is never behind the frontend. It needs two more settings
+on the `production` environment: the `CONVEX_DEPLOY_KEY` secret (from the Convex
+dashboard) and the `PUBLIC_CONVEX_URL` variable.
 
 React components read data with `useQuery`/`useMutation` from `convex/react`; the
 `ConvexProvider` is wired up in `src/app/App.tsx`.

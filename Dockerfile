@@ -18,6 +18,11 @@ RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
 
 # --- build: compile the Astro server bundle ----------------------------------
 FROM deps AS build
+# Vite inlines PUBLIC_ vars at build time, into the server bundle as well as the
+# client one, so the Convex URL has to be present here rather than at runtime.
+# Passing a wrong value produces an image that renders but talks to nothing.
+ARG PUBLIC_CONVEX_URL
+ENV PUBLIC_CONVEX_URL=$PUBLIC_CONVEX_URL
 COPY . .
 RUN pnpm build
 
