@@ -8,7 +8,7 @@ on:
 
 permissions:
   contents: read
-
+  
 jobs:
   # One pipeline: the app is typechecked, built and packaged in the same
   # workspace, so the image contains exactly the artifacts that were verified.

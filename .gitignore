@@ -25,3 +25,17 @@ pnpm-debug.log*
 .idea/
 
 /convex/_generated
+# terraform
+# .terraform.lock.hcl is committed on purpose — it pins provider versions.
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+crash.*.log
+# May contain values you do not want in git; tfvars.example is the tracked one.
+*.tfvars
+*.tfvars.json
+!*.tfvars.example
+.terraformrc
+terraform.rc
