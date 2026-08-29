@@ -1,0 +1,21 @@
+# Copy to terraform.tfvars and edit. Every value below is already the default;
+# they are listed here as the knobs worth reaching for first.
+
+# Pin to a commit SHA instead of `latest` when you want Terraform, rather than
+# a re-pushed tag, to decide what is running.
+image_tag = "latest"
+
+desired_count = 1
+task_cpu      = 512
+task_memory   = 1024
+
+# One NAT gateway shared across AZs. Set false to make outbound traffic
+# survive an AZ failure, at roughly $33/mo more per AZ.
+single_nat_gateway = true
+
+# ENABLED doubles the OpenSearch Serverless OCU floor from 2 to 4.
+opensearch_standby_replicas = "DISABLED"
+
+# Without an entry here, no human can read the collection or open Dashboards,
+# regardless of their IAM permissions.
+# opensearch_admin_principals = ["arn:aws:iam::828786775790:role/YourSSORole"]
