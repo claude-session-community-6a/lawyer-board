@@ -100,3 +100,29 @@ add a temporary step before `configure-aws-credentials`:
 ```
 
 Remove it once debugging is done — it prints a live credential into the logs.
+## Convex
+
+Backend functions live in `convex/` and run on Convex, not in the Astro server.
+`convex/_generated/` is written by the CLI — never edit it by hand. The root
+`tsconfig.json` excludes `convex/`; that directory has its own `tsconfig.json`
+and `convex dev` typechecks it.
+
+First-time setup (interactive, needs a Convex login):
+
+```
+npx convex dev
+```
+
+It creates the deployment, writes `CONVEX_DEPLOYMENT` and the deployment URL to
+`.env.local`, and generates `convex/_generated/`. Astro only exposes
+`PUBLIC_`-prefixed vars to the browser, so `.env.local` also needs:
+
+```
+PUBLIC_CONVEX_URL=<the same deployment URL>
+```
+
+Day to day, run `pnpm dev:convex` alongside `astro dev --background` — it watches
+`convex/` and pushes changes. `pnpm convex:deploy` pushes to production.
+
+React components read data with `useQuery`/`useMutation` from `convex/react`; the
+`ConvexProvider` is wired up in `src/app/App.tsx`.
