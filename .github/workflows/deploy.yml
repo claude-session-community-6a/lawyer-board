@@ -1,0 +1,24 @@
+name: Deploy
+
+# Need ID token write permission to use OIDC
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+jobs:
+  run_job_with_aws:
+    runs-on: ubuntu-latest
+    env:
+      AWS_DEPLOYMENT_ROLE_ARN: ${{ vars.AWS_DEPLOYMENT_ROLE_ARN }}
+      AWS_REGION: ${{ vars.AWS_REGION }}
+    steps:
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c #v6.2.3
+        with:
+          role-to-assume: ${{ env.AWS_DEPLOYMENT_ROLE_ARN}}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Additional steps
+        run: |
+          # Your commands that require AWS credentials
+          aws sts get-caller-identity
