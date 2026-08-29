@@ -24,7 +24,7 @@ import { useStore } from "../store";
 import { estadoVariant, formatFecha } from "../format";
 
 export function ExpedientesList() {
-  const { expedientes } = useStore();
+  const { expedientes, cargando } = useStore();
   // Seeded from Astro.url.search on the server, then owned by the client.
   const [searchParams, setSearchParams] = useSearchParams();
   const q = searchParams.get("q") ?? "";
@@ -45,7 +45,9 @@ export function ExpedientesList() {
         <div className="flex flex-col gap-1">
           <h1 className="text-2xl font-semibold tracking-tight">Expedientes</h1>
           <p className="text-muted-foreground text-sm">
-            {expedientes.length} expedientes en el despacho.
+            {cargando
+              ? "Cargando…"
+              : `${expedientes.length} expedientes en el despacho.`}
           </p>
         </div>
         <div className="relative">
@@ -71,10 +73,13 @@ export function ExpedientesList() {
             <EmptyMedia variant="icon">
               <FolderOpenIcon />
             </EmptyMedia>
-            <EmptyTitle>Sin resultados</EmptyTitle>
+            <EmptyTitle>
+              {term ? "Sin resultados" : "Sin expedientes"}
+            </EmptyTitle>
             <EmptyDescription>
-              Ningún expediente coincide con “{q}”. Ajusta la búsqueda o crea uno
-              nuevo.
+              {term
+                ? `Ningún expediente coincide con “${q}”. Ajusta la búsqueda o crea uno nuevo.`
+                : "Aún no hay expedientes registrados. Crea el primero para empezar."}
             </EmptyDescription>
           </EmptyHeader>
           <EmptyContent>

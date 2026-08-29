@@ -25,7 +25,11 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { useStore } from "../store";
+import { useQuery } from "convex/react";
+
+import { api } from "../../../convex/_generated/api";
+import { mapExpediente } from "@/lib/expedientes";
+import { Spinner } from "@/components/ui/spinner";
 import { estadoVariant, formatFecha, formatTamano } from "../format";
 import { NoEncontrado } from "./NoEncontrado";
 
@@ -40,10 +44,22 @@ function Dato({ etiqueta, valor }: { etiqueta: string; valor: string }) {
 
 export function ExpedienteDetalle() {
   const { id } = useParams<{ id: string }>();
-  const { expedientes } = useStore();
-  const expediente = expedientes.find((e) => e.id === id || e.numero === id);
+  // Queried on its own rather than filtered out of the list, so a deep link to
+  // an expediente resolves even before the list has loaded.
+  const row = useQuery(api.expedientes.get, { key: id });
 
-  if (!expediente) return <NoEncontrado />;
+  // `undefined` is Convex still answering; `null` is a genuine 404.
+  if (row === undefined) {
+    return (
+      <div className="text-muted-foreground flex items-center gap-2 py-16 text-sm">
+        <Spinner />
+        Cargando expediente…
+      </div>
+    );
+  }
+  if (row === null) return <NoEncontrado />;
+
+  const expediente = mapExpediente(row);
 
   return (
     <div className="flex flex-col gap-6">

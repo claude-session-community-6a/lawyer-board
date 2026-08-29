@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useLocation } from "wouter";
+import { useMutation } from "convex/react";
 import { ArrowLeftIcon, ArrowRightIcon, CheckIcon, XIcon } from "lucide-react";
 import { toast } from "sonner";
 
@@ -36,11 +37,10 @@ import {
   MATERIAS,
   TIPOS_DOCUMENTO,
   type Materia,
-  type Expediente,
   type TipoDocumento,
 } from "@/lib/expedientes";
+import { api } from "../../../convex/_generated/api";
 import { formatTamano } from "../format";
-import { useStore } from "../store";
 import { FileDropzone } from "../components/FileDropzone";
 import { useUploads } from "../use-uploads";
 
@@ -66,7 +66,7 @@ const DATOS_INICIALES: Datos = {
 
 export function NuevoExpediente() {
   const [, navigate] = useLocation();
-  const { agregarExpediente } = useStore();
+  const crearExpediente = useMutation(api.expedientes.create);
   const [paso, setPaso] = useState<1 | 2>(1);
   const [datos, setDatos] = useState<Datos>(DATOS_INICIALES);
   const [guardando, setGuardando] = useState(false);
@@ -87,25 +87,20 @@ export function NuevoExpediente() {
   async function guardar() {
     setGuardando(true);
     try {
-      const response = await fetch("/api/expedientes", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          ...datos,
-          documentos: listos.map((u) => ({
-            nombre: u.nombre,
-            tipo: u.tipo,
-            tamanoBytes: u.tamanoBytes,
-          })),
-        }),
+      // Straight to Convex: the mutation writes the expediente and its
+      // documents together, and every open list updates itself.
+      const id = await crearExpediente({
+        ...datos,
+        documentos: listos.map((u) => ({
+          nombre: u.nombre,
+          tipo: u.tipo,
+          tamanoBytes: u.tamanoBytes,
+        })),
       });
-      if (!response.ok) throw new Error(`El servidor respondió ${response.status}`);
-      const expediente = (await response.json()) as Expediente;
-      agregarExpediente(expediente);
       toast.success("Expediente creado", {
         description: `${datos.numero} · ${listos.length} documento(s) adjuntos.`,
       });
-      navigate(`/expedientes/${expediente.id}`);
+      navigate(`/expedientes/${id}`);
     } catch (error) {
       toast.error("No se pudo crear el expediente", {
         description: error instanceof Error ? error.message : undefined,

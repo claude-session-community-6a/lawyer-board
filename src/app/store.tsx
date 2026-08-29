@@ -1,19 +1,24 @@
-import { createContext, useContext, useMemo, useState, type ReactNode } from "react";
-import type { Expediente } from "@/lib/expedientes";
+import { createContext, useContext, useMemo, type ReactNode } from "react";
+import { useQuery } from "convex/react";
+
+import { api } from "../../convex/_generated/api";
+import { mapExpediente, type Expediente } from "@/lib/expedientes";
 
 export interface SsrPayload {
   /** Pathname Astro rendered, used to prime wouter's router. */
   path: string;
   /** Query string (without the leading `?`) Astro rendered. */
   search: string;
+  /** The Convex list as of the server render, so the first paint has data. */
   expedientes: Expediente[];
 }
 
 interface Store {
   ssr: SsrPayload;
+  /** Live from Convex; falls back to the SSR snapshot until the socket opens. */
   expedientes: Expediente[];
-  /** Adds a freshly created expediente so the SPA sees it without a reload. */
-  agregarExpediente: (expediente: Expediente) => void;
+  /** True only before Convex has answered for the first time. */
+  cargando: boolean;
 }
 
 const StoreContext = createContext<Store | null>(null);
@@ -25,18 +30,17 @@ export function StoreProvider({
   ssr: SsrPayload;
   children: ReactNode;
 }) {
-  // Seeded from the server render, then owned by the client for the rest of
-  // the session. A reload re-seeds it from Astro.
-  const [expedientes, setExpedientes] = useState(ssr.expedientes);
+  // Convex pushes every write to every subscriber, so a created expediente
+  // shows up here without anyone telling the store about it.
+  const live = useQuery(api.expedientes.list);
 
   const value = useMemo<Store>(
     () => ({
       ssr,
-      expedientes,
-      agregarExpediente: (expediente) =>
-        setExpedientes((current) => [expediente, ...current]),
+      expedientes: live ? live.map(mapExpediente) : ssr.expedientes,
+      cargando: live === undefined,
     }),
-    [ssr, expedientes]
+    [ssr, live]
   );
 
   return <StoreContext value={value}>{children}</StoreContext>;
