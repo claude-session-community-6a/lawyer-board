@@ -19,9 +19,10 @@ imports `api` from `convex/_generated/api`, step 2 cannot compile until step 1
 has run. Deploying the backend first also means the frontend never ships a call
 to a query the backend does not have yet.
 
-In CI this should be `.github/workflows/deploy.yml`: a job runs step 1, then the
-`publish` job runs step 2 inside the Docker build and pushes the image. **That
-wiring does not exist yet** — see [CI/CD handoff](#cicd-handoff) below.
+In CI this is `.github/workflows/ci.yml`, in one job: it deploys Convex, builds
+the app, installs a production dependency tree, then packages and pushes the
+image. A pull request runs the same job but stops after the image builds — it
+runs `convex codegen` instead of `convex deploy`, and never pushes.
 
 ## Environment variables
 
@@ -58,7 +59,8 @@ server bundle as well as the client one — so:
 | `CONVEX_DEPLOYMENT` | `.env.local`, written by `npx convex dev` | Local only. Names your dev deployment; CI never reads it. |
 | `AWS_DEPLOYMENT_ROLE_ARN` | repository variable | Assumed via OIDC; the workflow needs `id-token: write`. |
 | `AWS_REGION` | repository variable | |
-| `ECR_REPOSITORY` | repository variable | |
+| `ECR_REGISTRY` | `production` variable | e.g. `828786775790.dkr.ecr.us-east-1.amazonaws.com` |
+| `ECR_REPOSITORY` | `production` variable | |
 
 ### Runtime — read by the container when it starts
 
@@ -105,93 +107,57 @@ On macOS or arm64 that produces an image that only runs locally: the copied
 native binaries match the machine that installed them. A publishable image has
 to be prepared on glibc x64.
 
-`.github/workflows/deploy.yml` is manual dispatch (`gh workflow run deploy.yml`)
-and **does not work at all now** — it runs `docker build` against a plain
-checkout that has no `dist/`. It also never deploys Convex. Both gaps are below.
+`.github/workflows/deploy.yml` is manual dispatch
+(`gh workflow run deploy.yml`) and does nothing but call `ci.yml` — it exists so
+a deploy can be re-run without an empty commit. It publishes only when
+dispatched from `main`, because that is the condition `ci.yml` keys on.
 
-## CI/CD handoff
+## What CI does
 
-The application side of Convex is done and merged in this PR. The workflow
-changes were deliberately left out so they can be reviewed and owned by whoever
-runs deploys. Three things need doing.
+`ci.yml` is one job on `ubuntu-latest` with `environment: production`, so it can
+read the environment's variables and secrets. A single `PUBLISH` flag —
+`github.event_name != 'pull_request' && github.ref == 'refs/heads/main'` —
+decides which of the paired steps run.
 
-### 1. `CONVEX_DEPLOY_KEY` must be a repository secret, or CI cannot run
+| Step | Pull request | Push to `main` |
+| --- | --- | --- |
+| `convex codegen` | ✓ | — |
+| `convex deploy --yes` | — | ✓ |
+| `pnpm typecheck` | ✓ | ✓ |
+| `pnpm test`, if a `test` script exists | ✓ | ✓ |
+| `pnpm build` | ✓ | ✓ |
+| production dependency install | ✓ | ✓ |
+| `docker build` | ✓ (`push: false`) | — |
+| assume the AWS role, log in to ECR, build and push | — | ✓ |
 
-`convex/_generated/` is gitignored, so CI generates it with `convex codegen`.
-That command has no offline mode — it reads the deployment named by the key and
-exits non-zero without one:
+The image is tagged twice: `:${{ github.sha }}`, which is the immutable tag a
+deployment should reference, and `:latest`.
+
+`ubuntu-latest` (glibc, x64) is not incidental — `node_modules` is copied into
+the image rather than installed, so the runner has to match `node:22.22.0-slim`.
+Moving either side to Alpine or arm64 without the other ships an image whose
+native binaries (sharp, esbuild, lightningcss) fail to load at startup.
+
+### Two things still open
+
+**`CONVEX_DEPLOY_KEY` gates every run, including pull requests.**
+`convex/_generated/` is gitignored, so CI generates it. `convex codegen` has no
+offline mode — it reads the deployment named by the key and exits non-zero
+without one:
 
 ```
 ✖ No CONVEX_DEPLOYMENT set, run `npx convex dev` to configure a Convex project
 ```
 
-Two consequences worth knowing before this lands:
+The job declares `environment: production`, so an environment secret is enough.
+But pull requests from forks receive no secrets at all, so CI cannot pass on
+them. If fork contributions matter, commit `convex/_generated/` instead — which
+is what Convex's own `codegen --help` recommends ("should be committed to the
+repo") — and drop the codegen step.
 
-- The secret has to exist at **repository** scope, not only on the `production`
-  environment. The CI job declares no `environment:`, so environment secrets are
-  not visible to it.
-- Pull requests from forks receive no secrets, so CI cannot pass on them. If
-  fork contributions matter, commit `convex/_generated/` instead — which is what
-  Convex's own `codegen --help` recommends ("should be committed to the repo").
-
-### 2. `deploy.yml` never deploys Convex
-
-Functions in `convex/` are currently only reachable by someone running
-`npx convex deploy` by hand. A job needs to run it before the image is built, so
-the backend is never behind the frontend that calls it:
-
-```yaml
-  convex:
-    name: Deploy Convex functions
-    needs: verify
-    runs-on: ubuntu-latest
-    environment:
-      name: production
-    steps:
-      - uses: actions/checkout@... # v4.2.2
-      - uses: pnpm/action-setup@... # v4.1.0
-      - uses: actions/setup-node@... # v4.1.0
-        with:
-          node-version-file: .nvmrc
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - name: Push functions to the production deployment
-        run: pnpm exec convex deploy --yes
-        env:
-          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY }}
-```
-
-Then gate publishing on it: `needs: [verify, convex]`.
-
-### 3. `deploy.yml` builds the image straight from source, which no longer works
-
-This is the breaking one. The `Dockerfile` is now runtime-only: it copies
-`dist/` and a production `node_modules` out of the build context and compiles
-nothing. `deploy.yml`'s `publish` job still runs `docker build` against a plain
-checkout, where neither directory exists, so the build fails outright.
-
-The `publish` job needs the same preparation `ci.yml` now does, before its
-`docker build`:
-
-```yaml
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm exec convex codegen --typecheck disable
-        env:
-          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY }}
-      - run: pnpm build
-        env:
-          PUBLIC_CONVEX_URL: ${{ vars.PUBLIC_CONVEX_URL }}   # the real one
-      - run: pnpm install --frozen-lockfile --prod --config.node-linker=hoisted
-```
-
-Note the ordering constraint this creates: `node_modules` is copied, not
-installed, so it must be produced on a runner whose libc and CPU match the base
-image. `ubuntu-latest` (glibc, x64) matches `node:22.22.0-slim`. Moving either
-side to Alpine or to arm64 without moving the other ships an image whose native
-binaries (sharp, esbuild, lightningcss) fail to load at startup.
-
-Also worth deciding: `ci.yml` no longer boots the image it builds, so nothing
-currently catches that class of failure before it reaches ECR.
+**Nothing boots the image before it reaches ECR.** The `Dockerfile` has a
+`HEALTHCHECK`, but CI never runs the container, so a bundle that builds and
+crashes on start is caught only after the push.
 
 ## Repository settings
 
@@ -199,9 +165,10 @@ currently catches that class of failure before it reaches ECR.
 | --- | --- | --- |
 | `AWS_DEPLOYMENT_ROLE_ARN` | repository variable | set |
 | `AWS_REGION` | repository variable | set |
-| `ECR_REPOSITORY` | repository variable | set (`lawyer-board`) |
+| `ECR_REGISTRY` | `production` variable | **must be set — the push tags are built from it** |
+| `ECR_REPOSITORY` | `production` variable | set (`lawyer-board`) |
 | `PUBLIC_CONVEX_URL` | `production` variable | set (`https://disciplined-toucan-793.convex.cloud`) |
-| `CONVEX_DEPLOY_KEY` | `production` secret | **not set — the Convex deploy job cannot work without it** |
+| `CONVEX_DEPLOY_KEY` | `production` secret | **not set — no run can pass without it, pull requests included** |
 
 The deploy key is generated in the Convex dashboard under Settings → Deploy Keys;
 no CLI command mints one. Then:

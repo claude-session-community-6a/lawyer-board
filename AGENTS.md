@@ -44,11 +44,15 @@ Keep the Node version in `Dockerfile` (`ARG NODE_VERSION`) in sync with `.nvmrc`
 
 Workflows:
 
-- `.github/workflows/ci.yml` — one `build` job: Convex codegen, typecheck,
-  `astro build`, a production dependency install, then the image build. Runs on
-  pushes to `main` and on PRs, and is reusable via `workflow_call`.
-- `.github/workflows/deploy.yml` — manual dispatch. Calls CI first, then assumes
-  the AWS role via OIDC and pushes the image to ECR.
+- `.github/workflows/ci.yml` — one `build` job covering both paths. A PR runs
+  Convex codegen, typecheck, tests, `astro build`, a production dependency
+  install and a `push: false` image build. A push to `main` swaps codegen for
+  `convex deploy`, then assumes the AWS role via OIDC and pushes the image to
+  ECR tagged `:<sha>` and `:latest`. The job declares `environment: production`
+  and branches on one `PUBLISH` env flag. Reusable via `workflow_call`.
+- `.github/workflows/deploy.yml` — manual dispatch; calls `ci.yml` with
+  `secrets: inherit` and nothing else. Publishes only when dispatched from
+  `main`, since that is what `PUBLISH` keys on.
 - `.github/workflows/terraform-plan.yml` — on PRs touching `terraform/`. Runs
   fmt, validate and a `-lock=false` plan, then posts the result as a single
   PR comment that it updates in place. Skipped on fork PRs, which have no OIDC.
@@ -62,8 +66,9 @@ Workflows:
 Apply and drift share the `terraform-apply` concurrency group so they can never
 run against the state at the same time.
 
-Deploy needs three repository variables: `AWS_DEPLOYMENT_ROLE_ARN`, `AWS_REGION`,
-and `ECR_REPOSITORY`.
+Publishing needs `AWS_DEPLOYMENT_ROLE_ARN` and `AWS_REGION` as repository
+variables, and `ECR_REGISTRY` and `ECR_REPOSITORY` on the `production`
+environment.
 
 Note: `astro check` cannot run under TypeScript 7 — the language server needs
 TypeScript's programmatic API, which the native compiler does not expose yet
@@ -95,7 +100,7 @@ What follows the prefix is what varies per trigger:
 
 | Workflow | Trigger | Suffix after the prefix |
 | --- | --- | --- |
-| `deploy.yml`, `terraform-apply.yml` | main, `environment: production` | `:environment:production` |
+| `ci.yml` (and `deploy.yml`, which calls it), `terraform-apply.yml` | main, `environment: production` | `:environment:production` |
 | `terraform-drift.yml` | schedule on main, no environment | `:ref:refs/heads/main` |
 | `terraform-plan.yml` | pull request | `:pull_request` |
 
@@ -168,16 +173,19 @@ and looks identical to a subject mismatch.
 
 Two things about the `sub` claim that are easy to get wrong:
 
-- Because the `publish` job declares `environment: production`, GitHub emits the
+- Because CI's `build` job declares `environment: production`, GitHub emits the
   environment form of `sub` and **omits the ref**. It is either
   `repo:OWNER/REPO:environment:NAME` or `repo:OWNER/REPO:ref:refs/heads/BRANCH`,
   never both. Adding `:ref:...` to the end of the environment form makes the
   policy match nothing.
 - The branch restriction therefore rides on the separate top-level `ref` claim.
   It matters here because `deploy.yml` is `workflow_dispatch`-only and dispatch
-  can be triggered from any branch. Setting the `production` environment's
-  "Deployment branches" rule to `main` enforces the same thing earlier, before
-  the token is minted.
+  can be triggered from any branch. A "Deployment branches" rule on the
+  `production` environment would enforce the same thing earlier, before the
+  token is minted — but **do not add one**: `ci.yml`'s single job declares that
+  environment on pull requests too, to read `PUBLIC_CONVEX_URL` and
+  `CONVEX_DEPLOY_KEY`, and the rule would fail every PR run outright. Splitting
+  the publish steps into their own job is the prerequisite for that rule.
 
 Changing the job's `environment:` or trigger changes the claims, so the trust
 policy has to be updated in step. To see what AWS is actually comparing against,
