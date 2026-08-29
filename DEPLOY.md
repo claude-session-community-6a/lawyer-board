@@ -39,11 +39,12 @@ server bundle as well as the client one — so:
 
 - A missing value fails `astro build` with `PUBLIC_CONVEX_URL is missing`,
   rather than surfacing as a 500 on the first render.
-- Setting it at container runtime does nothing. It has to be present when the
-  bundle is compiled, which is why the `Dockerfile` takes it as a build arg:
+- Setting it at container runtime does nothing. It has to be present when
+  `astro build` runs. The `Dockerfile` no longer compiles anything, so this is
+  an environment variable on the build step, not a Docker build arg:
 
   ```
-  docker build --build-arg PUBLIC_CONVEX_URL=https://<deployment>.convex.cloud -t lawyer-board .
+  PUBLIC_CONVEX_URL=https://<deployment>.convex.cloud pnpm build
   ```
 
 - An image is therefore bound to one Convex deployment. Pointing at a different
@@ -89,17 +90,24 @@ it watches `convex/` and pushes changes as you edit.
 
 ## Running the deploy
 
-Today, manually, from a checkout with the Convex CLI logged in:
+Today, manually, from a checkout with the Convex CLI logged in. The image is
+packaged from build output, so everything is prepared first and `docker build`
+only copies:
 
 ```
 npx convex deploy
-docker build --build-arg PUBLIC_CONVEX_URL=https://disciplined-toucan-793.convex.cloud -t lawyer-board .
+PUBLIC_CONVEX_URL=https://disciplined-toucan-793.convex.cloud pnpm build
+pnpm install --frozen-lockfile --prod --config.node-linker=hoisted
+docker build -t lawyer-board .
 ```
 
+On macOS or arm64 that produces an image that only runs locally: the copied
+native binaries match the machine that installed them. A publishable image has
+to be prepared on glibc x64.
+
 `.github/workflows/deploy.yml` is manual dispatch (`gh workflow run deploy.yml`)
-and currently builds and pushes the image to ECR, but **does not deploy Convex**
-and **does not pass the build arg**, so the image it publishes 500s on every
-render. Both gaps are described below.
+and **does not work at all now** — it runs `docker build` against a plain
+checkout that has no `dist/`. It also never deploys Convex. Both gaps are below.
 
 ## CI/CD handoff
 
@@ -107,38 +115,24 @@ The application side of Convex is done and merged in this PR. The workflow
 changes were deliberately left out so they can be reviewed and owned by whoever
 runs deploys. Three things need doing.
 
-### 1. CI is red on this branch, and will be until `ci.yml` is updated
+### 1. `CONVEX_DEPLOY_KEY` must be a repository secret, or CI cannot run
 
-Two failures:
+`convex/_generated/` is gitignored, so CI generates it with `convex codegen`.
+That command has no offline mode — it reads the deployment named by the key and
+exits non-zero without one:
 
-- **Typecheck** — `tsc` cannot resolve `astro:env/client`. That declaration is
-  generated into the gitignored `.astro/`, which a fresh checkout does not have.
-  Fixed by calling the new `typecheck` script, which runs `astro sync` first.
-  It needs no environment variable.
-- **Build / image build** — `astro build` fails with
-  `PUBLIC_CONVEX_URL is missing` when the variable is unset. CI has no Convex
-  deployment and does not need one: nothing connects during a build or the boot
-  smoke test, so a placeholder is enough.
-
-In the `verify` job, replace the bare `tsc` invocation:
-
-```yaml
-      # Runs `astro sync` first, so astro:env types exist. No env var needed.
-      - name: Typecheck
-        run: pnpm typecheck
-
-      - name: Build
-        run: pnpm build
-        env:
-          PUBLIC_CONVEX_URL: https://ci-placeholder.convex.cloud
+```
+✖ No CONVEX_DEPLOYMENT set, run `npx convex dev` to configure a Convex project
 ```
 
-And in the `docker` job's build step:
+Two consequences worth knowing before this lands:
 
-```yaml
-          build-args: |
-            PUBLIC_CONVEX_URL=https://ci-placeholder.convex.cloud
-```
+- The secret has to exist at **repository** scope, not only on the `production`
+  environment. The CI job declares no `environment:`, so environment secrets are
+  not visible to it.
+- Pull requests from forks receive no secrets, so CI cannot pass on them. If
+  fork contributions matter, commit `convex/_generated/` instead — which is what
+  Convex's own `codegen --help` recommends ("should be committed to the repo").
 
 ### 2. `deploy.yml` never deploys Convex
 
@@ -169,26 +163,35 @@ the backend is never behind the frontend that calls it:
 
 Then gate publishing on it: `needs: [verify, convex]`.
 
-### 3. `deploy.yml` builds an image with no Convex URL
+### 3. `deploy.yml` builds the image straight from source, which no longer works
 
-The `publish` job must pass the real URL into the Docker build, or it ships a
-bundle with the value inlined as `undefined`:
+This is the breaking one. The `Dockerfile` is now runtime-only: it copies
+`dist/` and a production `node_modules` out of the build context and compiles
+nothing. `deploy.yml`'s `publish` job still runs `docker build` against a plain
+checkout, where neither directory exists, so the build fails outright.
+
+The `publish` job needs the same preparation `ci.yml` now does, before its
+`docker build`:
 
 ```yaml
-    env:
-      PUBLIC_CONVEX_URL: ${{ vars.PUBLIC_CONVEX_URL }}
-    steps:
-      # Fail here rather than publishing an image that 500s on every render.
-      - name: Require the Convex URL
-        run: test -n "$PUBLIC_CONVEX_URL" || { echo "Set PUBLIC_CONVEX_URL on the production environment"; exit 1; }
-      ...
-      - name: Build and push image
-        with:
-          build-args: |
-            PUBLIC_CONVEX_URL=${{ env.PUBLIC_CONVEX_URL }}
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec convex codegen --typecheck disable
+        env:
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY }}
+      - run: pnpm build
+        env:
+          PUBLIC_CONVEX_URL: ${{ vars.PUBLIC_CONVEX_URL }}   # the real one
+      - run: pnpm install --frozen-lockfile --prod --config.node-linker=hoisted
 ```
 
-The `Dockerfile` already accepts this build arg; that part is in this PR.
+Note the ordering constraint this creates: `node_modules` is copied, not
+installed, so it must be produced on a runner whose libc and CPU match the base
+image. `ubuntu-latest` (glibc, x64) matches `node:22.22.0-slim`. Moving either
+side to Alpine or to arm64 without moving the other ships an image whose native
+binaries (sharp, esbuild, lightningcss) fail to load at startup.
+
+Also worth deciding: `ci.yml` no longer boots the image it builds, so nothing
+currently catches that class of failure before it reaches ECR.
 
 ## Repository settings
 

@@ -1,18 +1,7 @@
-node_modules
-dist
-.astro
-.git
-.github
-.vscode
-.idea
-.playwright-mcp
-.env
-.env.*
-npm-debug.log*
-pnpm-debug.log*
-.DS_Store
-README.md
-AGENTS.md
-CLAUDE.md
-Dockerfile
-.dockerignore
+# The image is packaged from build output only, so this is an allowlist:
+# exclude everything, then admit exactly what the Dockerfile copies. Sources,
+# .git and env files never enter the context.
+*
+!dist
+!node_modules
+!package.json

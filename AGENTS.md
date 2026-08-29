@@ -23,21 +23,30 @@ Consult these guides before working on related tasks:
 
 ## Container and CI
 
-The app ships as a container built by the multi-stage `Dockerfile` (Astro's
-standalone Node adapter). Build and run locally:
+The app ships as a container (Astro's standalone Node adapter). The `Dockerfile`
+compiles nothing: it copies `dist/` and a production `node_modules` out of the
+build context, so both must exist before you build it.
 
 ```
+pnpm build
+pnpm install --frozen-lockfile --prod --config.node-linker=hoisted
 docker build -t lawyer-board .
 docker run --rm -p 4321:4321 lawyer-board
 ```
+
+Because `node_modules` is copied rather than installed, it has to come from a
+host matching the base image — glibc, same CPU. The base is `node:*-slim`
+(Debian), not Alpine, for exactly that reason: the tree carries native binaries
+(sharp, esbuild, lightningcss). An image prepared on macOS or arm64 runs only
+there. Afterwards, `pnpm install` restores the dev tree.
 
 Keep the Node version in `Dockerfile` (`ARG NODE_VERSION`) in sync with `.nvmrc`.
 
 Workflows:
 
-- `.github/workflows/ci.yml` — typecheck, `astro build`, then build the image and
-  boot it to confirm it serves traffic. Runs on pushes to `main` and on PRs, and
-  is reusable via `workflow_call`.
+- `.github/workflows/ci.yml` — one `build` job: Convex codegen, typecheck,
+  `astro build`, a production dependency install, then the image build. Runs on
+  pushes to `main` and on PRs, and is reusable via `workflow_call`.
 - `.github/workflows/deploy.yml` — manual dispatch. Calls CI first, then assumes
   the AWS role via OIDC and pushes the image to ECR.
 

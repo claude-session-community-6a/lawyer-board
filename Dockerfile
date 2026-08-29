@@ -1,46 +1,19 @@
 # syntax=docker/dockerfile:1
 
-# Astro runs with the standalone Node adapter, so the runtime image only needs
-# the built server plus production dependencies.
-# Keep in sync with .nvmrc, which CI uses for the non-container jobs.
+# Runtime-only image. Nothing is compiled here: CI builds the Astro server
+# bundle and installs the production dependency tree, and this stage copies both
+# in as they are.
+#
+# Because node_modules is copied rather than installed, it has to be produced on
+# a host whose libc and CPU match this image. The tree contains native binaries
+# (sharp, esbuild, lightningcss, @oxc-project), so the builder and this base
+# have to agree — hence `-slim` (Debian, glibc) rather than `-alpine` (musl),
+# which would fail to load them at startup.
+#
+# Keep the version in sync with .nvmrc.
 ARG NODE_VERSION=22.22.0
 
-# --- deps: full dependency tree, used to build -------------------------------
-FROM node:${NODE_VERSION}-alpine AS deps
-ENV PNPM_HOME=/pnpm
-ENV PATH=$PNPM_HOME:$PATH
-RUN corepack enable
-WORKDIR /app
-
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
-RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
-    pnpm install --frozen-lockfile
-
-# --- build: compile the Astro server bundle ----------------------------------
-FROM deps AS build
-# Vite inlines PUBLIC_ vars at build time, into the server bundle as well as the
-# client one, so the Convex URL has to be present here rather than at runtime.
-# Passing a wrong value produces an image that renders but talks to nothing.
-ARG PUBLIC_CONVEX_URL
-ENV PUBLIC_CONVEX_URL=$PUBLIC_CONVEX_URL
-COPY . .
-RUN pnpm build
-
-# --- prod-deps: runtime dependency tree, hoisted so it can be copied ---------
-FROM node:${NODE_VERSION}-alpine AS prod-deps
-ENV PNPM_HOME=/pnpm
-ENV PATH=$PNPM_HOME:$PATH
-RUN corepack enable
-WORKDIR /app
-
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
-# `node-linker=hoisted` produces a plain node_modules directory instead of the
-# symlinked store layout, which is what makes it copyable into the final stage.
-RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
-    pnpm install --frozen-lockfile --prod --config.node-linker=hoisted
-
-# --- runtime -----------------------------------------------------------------
-FROM node:${NODE_VERSION}-alpine AS runtime
+FROM node:${NODE_VERSION}-slim AS runtime
 WORKDIR /app
 
 ENV NODE_ENV=production
@@ -49,8 +22,9 @@ ENV NODE_ENV=production
 ENV HOST=0.0.0.0
 ENV PORT=4321
 
-COPY --from=prod-deps /app/node_modules ./node_modules
-COPY --from=build /app/dist ./dist
+# Prepared by the caller. See .dockerignore: the build context is these paths.
+COPY node_modules ./node_modules
+COPY dist ./dist
 COPY package.json ./
 
 EXPOSE 4321
