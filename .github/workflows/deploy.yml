@@ -17,6 +17,8 @@ jobs:
     name: Build and push to ECR
     needs: verify
     runs-on: ubuntu-latest
+    environment:
+      name: production
     env:
       AWS_DEPLOYMENT_ROLE_ARN: ${{ vars.AWS_DEPLOYMENT_ROLE_ARN }}
       AWS_REGION: ${{ vars.AWS_REGION }}
