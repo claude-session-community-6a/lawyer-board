@@ -129,10 +129,8 @@ passes a placeholder.
 Day to day, run `pnpm dev:convex` alongside `astro dev --background` — it watches
 `convex/` and pushes changes. `pnpm convex:deploy` pushes to production.
 
-In CI, `deploy.yml` pushes functions (`convex deploy`) before building the
-image, so the backend is never behind the frontend. It needs two more settings
-on the `production` environment: the `CONVEX_DEPLOY_KEY` secret (from the Convex
-dashboard) and the `PUBLIC_CONVEX_URL` variable.
+See [DEPLOY.md](./DEPLOY.md) for the deploy sequence and the full split between
+build-time, deploy-time, and runtime environment variables.
 
 React components read data with `useQuery`/`useMutation` from `convex/react`; the
 `ConvexProvider` is wired up in `src/app/App.tsx`.
