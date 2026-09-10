@@ -1,19 +1,27 @@
 ---
+import { PUBLIC_CONVEX_URL } from "astro:env/client";
+import { ConvexHttpClient } from "convex/browser";
+
 import Layout from "../layouts/Layout.astro";
 import App from "../app/App";
-import { listExpedientes } from "../lib/expedientes";
+import { api } from "../../convex/_generated/api";
 
 export const prerender = false;
 
-// SSR payload handed to the React app. `path` and `search` prime wouter's
-// router so the first server render matches the URL the client hydrates on.
+// El primer pintado sale de Convex por HTTP para que el listado venga en el
+// HTML. Ya hidratado, `useQuery` toma el relevo por websocket y lo mantiene vivo.
+const client = new ConvexHttpClient(PUBLIC_CONVEX_URL);
+const expedientes = await client.query(api.expedientes.list, {});
+
+// `path` y `search` priman el router de wouter para que el render del servidor
+// coincida con la URL sobre la que hidrata el cliente.
 const ssr = {
 	path: Astro.url.pathname,
 	search: Astro.url.search.replace(/^\?/, ""),
-	expedientes: listExpedientes(),
+	expedientes,
 };
 ---
 
-<Layout title="Expedientes — Despacho">
+<Layout title="Juicios laborales — Ávila & Miranda">
 	<App ssr={ssr} client:load />
 </Layout>
